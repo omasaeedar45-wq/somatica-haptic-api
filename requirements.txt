@@ -1,6 +1,7 @@
-flask==3.0.0
-librosa==0.10.1
+flask==3.0.3
+librosa==0.10.2
 numpy==1.26.4
-requests==2.31.0
-gunicorn==21.2.0
+requests==2.32.3
+gunicorn==22.0.0
 soundfile==0.12.1
+soxr==0.3.7
