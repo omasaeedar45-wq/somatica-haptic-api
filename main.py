@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 import librosa
 import numpy as np
 import tempfile
@@ -6,13 +7,21 @@ import os
 import requests
 
 app = Flask(__name__)
+CORS(app, origins="*", methods=["GET", "POST", "OPTIONS"], allow_headers=["Content-Type", "Authorization"])
 
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({"status": "ok", "service": "somatica-haptic-api"})
 
-@app.route('/convert', methods=['POST'])
+@app.route('/convert', methods=['POST', 'OPTIONS'])
 def convert():
+    if request.method == 'OPTIONS':
+        response = jsonify({'status': 'ok'})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+        response.headers.add('Access-Control-Allow-Methods', 'POST,OPTIONS')
+        return response
+
     data = request.get_json()
     if not data or 'audio_url' not in data:
         return jsonify({"error": "audio_url is required"}), 400
@@ -21,7 +30,7 @@ def convert():
     tmp_path = None
 
     try:
-        r = requests.get(audio_url, timeout=30)
+        r = requests.get(audio_url, timeout=60)
         r.raise_for_status()
         suffix = '.mp3' if 'mp3' in audio_url.lower() else '.wav'
         tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
@@ -34,9 +43,7 @@ def convert():
         hop_length = 512
 
         rms = librosa.feature.rms(y=y, hop_length=hop_length)[0]
-        rms_min = rms.min()
-        rms_max = rms.max()
-        rms_norm = (rms - rms_min) / (rms_max - rms_min + 1e-9)
+        rms_norm = (rms - rms.min()) / (rms.max() - rms.min() + 1e-9)
 
         onset_frames = librosa.onset.onset_detect(y=y, sr=sr, hop_length=hop_length, backtrack=True)
         onset_times = librosa.frames_to_time(onset_frames, sr=sr, hop_length=hop_length)
@@ -44,8 +51,7 @@ def convert():
         haptic_events = []
 
         for onset_time in onset_times:
-            frame_idx = librosa.time_to_frames(onset_time, sr=sr, hop_length=hop_length)
-            frame_idx = min(int(frame_idx), len(rms_norm) - 1)
+            frame_idx = min(int(librosa.time_to_frames(onset_time, sr=sr, hop_length=hop_length)), len(rms_norm) - 1)
             intensity = float(rms_norm[frame_idx])
             if intensity > 0.08:
                 haptic_events.append({
@@ -56,8 +62,7 @@ def convert():
 
         t = 0.0
         while t < duration:
-            frame_idx = librosa.time_to_frames(t, sr=sr, hop_length=hop_length)
-            frame_idx = min(int(frame_idx), len(rms_norm) - 1)
+            frame_idx = min(int(librosa.time_to_frames(t, sr=sr, hop_length=hop_length)), len(rms_norm) - 1)
             intensity = float(rms_norm[frame_idx]) * 0.4
             if intensity > 0.05:
                 haptic_events.append({
@@ -69,14 +74,18 @@ def convert():
 
         haptic_events.sort(key=lambda x: x["time"])
 
-        return jsonify({
+        response = jsonify({
             "duration": round(duration, 2),
             "total_events": len(haptic_events),
             "hapticEvents": haptic_events
         })
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        return response
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        response = jsonify({"error": str(e)})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        return response, 500
 
     finally:
         if tmp_path and os.path.exists(tmp_path):
